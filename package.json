@@ -11,7 +11,8 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "lint": "eslint .",
-    "lint:fix": "eslint --fix ."
+    "lint:fix": "eslint --fix .",
+    "blowitaway": "tsx src/index.ts -- delete"
   },
   "dependencies": {
     "@octokit/graphql": "^9.0.1",

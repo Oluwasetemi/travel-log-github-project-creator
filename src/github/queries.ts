@@ -64,6 +64,7 @@ export const SEARCH_ISSUE_QUERY = `
           number
           title
           body
+          state
           labels(first: 10) {
             nodes {
               id
@@ -93,6 +94,24 @@ export const CHECK_PROJECT_MEMBERSHIP_QUERY = `
               }
             }
           }
+        }
+      }
+    }
+  }
+`;
+
+export const FETCH_ALL_ISSUES_QUERY = `
+  query ($owner: String!, $repo: String!, $cursor: String) {
+    repository(owner: $owner, name: $repo) {
+      issues(first: 50, after: $cursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          number
+          state
         }
       }
     }

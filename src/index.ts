@@ -6,9 +6,12 @@ import { fileURLToPath } from "node:url";
 import type { MDStory } from "./types";
 
 import {
+  closeAllIssues,
   createIssue,
   createIssueAddToProject,
   createLabelIfNotExists,
+  deleteAllLabels,
+  fetchAllIssues,
   getProjectInfo,
   getRepositoryId,
   initClient,
@@ -20,8 +23,12 @@ const __dirname = dirname(__filename);
 
 const epicsDir = join(__dirname, "../data/epics");
 const storiesDir = join(__dirname, "../data/stories");
-const epicFiles = readdirSync(epicsDir).filter(file => file.endsWith(".md"));
-const storyFiles = readdirSync(storiesDir).filter(file => file.endsWith(".md"));
+// eslint-disable-next-line style/arrow-parens
+const epicFiles = readdirSync(epicsDir).filter((file) => file.endsWith(".md"));
+// eslint-disable-next-line style/arrow-parens
+const storyFiles = readdirSync(storiesDir).filter((file) =>
+  file.endsWith(".md"),
+);
 
 dotenv.config();
 
@@ -30,10 +37,28 @@ const repo = process.env.GITHUB_REPO;
 const token = process.env.GITHUB_TOKEN;
 
 if (!owner || !repo || !token) {
-  throw new Error("GITHUB_OWNER, GITHUB_REPO and GITHUB_TOKEN must be set in .env");
+  throw new Error(
+    "GITHUB_OWNER, GITHUB_REPO and GITHUB_TOKEN must be set in .env",
+  );
 }
 
 initClient(token);
+
+// run this section if the --delete flag is passed
+if (process.argv.includes("--delete")) {
+  // delete all the issues created
+  // 1. fetch all the issues in the project
+  const projectIssues = await fetchAllIssues(owner, repo);
+
+  // 2. delete(close) all the issues.
+  await closeAllIssues(owner, repo, projectIssues, token);
+  // 3. delete all the labels created
+  await deleteAllLabels(owner, repo, token);
+
+  console.log("All issues and labels deleted successfully.");
+
+  process.exit(0);
+}
 
 const projectInfo = await getProjectInfo({ owner, repo });
 if (!projectInfo) {
@@ -41,12 +66,15 @@ if (!projectInfo) {
 }
 const repositoryId = await getRepositoryId({ owner, repo });
 
-const epics: Record<string, {
-  epic: MDStory & {
-    stories: MDStory[];
-  };
-  issueId: string;
-}> = {};
+const epics: Record<
+  string,
+  {
+    epic: MDStory & {
+      stories: MDStory[];
+    };
+    issueId: string;
+  }
+> = {};
 epicFiles.forEach((file) => {
   const content = readFileSync(join(epicsDir, file), "utf-8");
   const { frontmatter, description } = getMDStory(content);
@@ -63,7 +91,13 @@ epicFiles.forEach((file) => {
   };
 });
 
-const labels = [...new Set([...Object.values(epics).map(epic => epic.epic.frontmatter.label), "Epic"])];
+const labels = [
+  ...new Set([
+    // eslint-disable-next-line style/arrow-parens
+    ...Object.values(epics).map((epic) => epic.epic.frontmatter.label),
+    "Epic",
+  ]),
+];
 const labelsByName = new Map<string, string>();
 for (const label of labels) {
   const labelInfo = await createLabelIfNotExists({
@@ -105,7 +139,7 @@ for (const epicStory of Object.values(epics)) {
     labelId,
   });
 
-  epicStory.issueId = issueId;
+  epicStory.issueId = issueId!;
 }
 
 const priorityOrder = JSON.parse(
@@ -126,7 +160,9 @@ const storiesWithEpic: MDStoryWithEpic[] = storyFiles.map((file) => {
 
   const priority = priorityIndex + 1;
 
-  const title = frontmatter.role ? `As a ${frontmatter.role}, I want to ${frontmatter.action}` : frontmatter.title;
+  const title = frontmatter.role
+    ? `As a ${frontmatter.role}, I want to ${frontmatter.action}`
+    : frontmatter.title;
 
   if (!title) {
     throw new Error(`Title not set for ${file}`);
@@ -149,7 +185,9 @@ const storiesWithEpic: MDStoryWithEpic[] = storyFiles.map((file) => {
 storiesWithEpic.sort((a, b) => a.priority - b.priority);
 
 for (const story of storiesWithEpic) {
-  let body = story.frontmatter.role ? `As a ${story.frontmatter.role}, I want to ${story.frontmatter.action} so that ${story.frontmatter.benefit}.\n\n` : "";
+  let body = story.frontmatter.role
+    ? `As a ${story.frontmatter.role}, I want to ${story.frontmatter.action} so that ${story.frontmatter.benefit}.\n\n`
+    : "";
   body += story.description;
 
   await createIssueAddToProject({

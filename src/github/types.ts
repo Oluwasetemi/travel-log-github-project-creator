@@ -18,6 +18,8 @@ export type Issue = {
   title: string;
   body: string;
   parentIssueId?: string;
+  state?: "OPEN" | "CLOSED";
+  number?: number;
 };
 
 export type ProjectInfo = {

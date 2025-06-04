@@ -1,4 +1,5 @@
 import { graphql } from "@octokit/graphql";
+import { Octokit } from "@octokit/rest";
 
 import type {
   AddToProjectMutationResponse,
@@ -12,6 +13,7 @@ import type {
   GetProjectIdParams,
   GetProjectQueryResponse,
   GetRepositoryIdQueryResponse,
+  Issue,
   SearchIssueQueryResponse,
 } from "./types";
 
@@ -24,6 +26,7 @@ import {
 } from "./mutations";
 import {
   CHECK_PROJECT_MEMBERSHIP_QUERY,
+  FETCH_ALL_ISSUES_QUERY,
   GET_LABEL_QUERY,
   GET_PROJECT_QUERY,
   GET_REPO_ID_QUERY,
@@ -42,6 +45,7 @@ const randomIssueLabelColors: string[] = [
 ];
 
 let colors = randomIssueLabelColors.slice();
+
 function getNextRandomColor(): string {
   if (colors.length === 0) {
     colors = randomIssueLabelColors.slice();
@@ -227,14 +231,27 @@ export async function createIssue({
   })) as SearchIssueQueryResponse;
 
   const existingIssues = searchResponse.search.nodes;
+
+  type ExistingIssue = (typeof existingIssues)[0] & {
+    state?: "OPEN" | "CLOSED" | null;
+  };
   if (existingIssues.length > 0) {
-    const existingIssue = existingIssues[0];
+    const existingIssue: ExistingIssue = existingIssues[0];
     console.log(
       `Found existing issue #${existingIssue.number} with title "${existingIssue.title}"`,
     );
 
+    // check if the issue is closed
+    console.dir(existingIssue);
+    if (existingIssue?.state !== null && existingIssue.state! === "CLOSED") {
+      console.log("issue closed");
+      // If the issue is closed, create a new one
+      return;
+    }
+
     const hasLabel = existingIssue.labels.nodes.some(
-      label => label.id === labelId,
+      // eslint-disable-next-line style/arrow-parens
+      (label) => label.id === labelId,
     );
     if (!hasLabel) {
       console.log(`Adding label to existing issue #${existingIssue.number}`);
@@ -318,7 +335,8 @@ async function getProjectItems(projectId: string): Promise<Set<string>> {
 
   const items = new Set(
     membershipResponse.node.items.nodes
-      .map(item => item.content?.id)
+      // eslint-disable-next-line style/arrow-parens
+      .map((item) => item.content?.id)
       .filter((id): id is string => id !== undefined),
   );
 
@@ -383,6 +401,116 @@ export async function createIssueAddToProject({
     owner,
     repo,
   });
+
+  if (!issueId) {
+    throw new Error("Failed to create issue");
+  }
+
   await addToProject({ issueId, projectInfo });
   return issueId;
+}
+
+export async function fetchAllIssues(owner: string, repo: string) {
+  let issues: Issue[] = [];
+  let hasNextPage = true;
+  let cursor = null;
+
+  while (hasNextPage) {
+    if (!graphqlClient) {
+      throw new Error("GraphQL client not initialized");
+    }
+
+    const variables: {
+      owner: string;
+      repo: string;
+      cursor: string | null;
+    } = { owner, repo, cursor };
+
+    type FetchAllIssuesQueryResponse = {
+      repository: {
+        issues: {
+          nodes: Issue[];
+          pageInfo: {
+            hasNextPage: boolean;
+            endCursor: string | null;
+          };
+        };
+      };
+    };
+
+    const result: FetchAllIssuesQueryResponse = await graphqlClient(
+      FETCH_ALL_ISSUES_QUERY,
+      variables,
+    );
+    console.dir(result);
+
+    issues = issues.concat(result.repository.issues.nodes);
+    hasNextPage = result.repository.issues.pageInfo.hasNextPage;
+    cursor = result.repository.issues.pageInfo.endCursor;
+  }
+
+  console.log(`Fetched ${issues.length} issues from ${owner}/${repo}`);
+  return issues;
+}
+
+export async function closeAllIssues(
+  owner: string,
+  repo: string,
+  issues: Issue[],
+  token: string,
+) {
+  const octokit = new Octokit({ auth: token });
+
+  for (const issue of issues) {
+    if (issue.number && issue.state !== "CLOSED") {
+      try {
+        await octokit.issues.update({
+          owner,
+          repo,
+          issue_number: issue.number,
+          state: "closed",
+        });
+        console.log(`✅ Closed issue #${issue.number}: ${issue.title}`);
+      }
+      catch (error) {
+        console.error(`❌ Failed to close issue #${issue.number}`, error);
+      }
+    }
+  }
+}
+
+export async function deleteAllLabels(
+  owner: string,
+  repo: string,
+  token: string,
+) {
+  const octokit = new Octokit({ auth: token });
+
+  try {
+    const labelsResponse = await octokit.paginate(
+      octokit.issues.listLabelsForRepo,
+      { owner, repo, per_page: 100 },
+    );
+
+    for (const label of labelsResponse) {
+      try {
+        await octokit.issues.deleteLabel({
+          owner,
+          repo,
+          name: label.name,
+        });
+        console.log(`🗑️ Deleted label: ${label.name}`);
+      }
+      catch (err) {
+        console.error(`❌ Failed to delete label: ${label.name}`, err);
+      }
+    }
+
+    console.log(
+      `✅ Deleted ${labelsResponse.length} labels from ${owner}/${repo}`,
+    );
+  }
+  catch (err) {
+    console.error("❌ Failed to fetch labels", err);
+  }
 }
